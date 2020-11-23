@@ -35,6 +35,101 @@
         return {writable, readable};
     };
 
+    // Copyright 2018 The Emulation-as-a-Service Authors.
+    // SPDX-License-Identifier: GPL-2.0-or-later
+
+    const _writable = new WeakMap();
+    const _readable = new WeakMap();
+    const _writeController = new WeakMap();
+    const _readController = new WeakMap();
+
+    const call = (object, method, args) => {
+        const fun = object[method];
+        if (typeof fun === "undefined") return;
+        if (typeof fun !== "function") throw new TypeError();
+        return Reflect.apply(fun, object, args);
+    };
+
+    /**
+     * A polyfill for `TransformStream` that uses the native `ReadableStream`
+     * and `WritableStream` implementations.
+     */
+    class TransformStream {
+        constructor(transformer = {}, writableStrategy = {}, readableStrategy = {}) {
+            let resolveRead = () => {};
+            const writable = new WritableStream({
+                start: (writeController) => {
+                    _writeController.set(this, writeController);
+                },
+                write: async (chunk) => {
+                    const readC = _readController.get(this);
+                    if (readC.desiredSize <= 0) {
+                        await new Promise(r => resolveRead = r);
+                    }
+                    return call(transformer, "transform", [chunk, controller]);
+                },
+                close: async () => {
+                    await call(transformer, "flush", [controller]);
+                    _readController.get(this).close();
+                },
+                abort: () => {
+                    return _readController.get(this).error();
+                }
+            }, writableStrategy);
+            const readable = new ReadableStream({
+                start: (readController) => {
+                    _readController.set(this, readController);
+                    if (typeof transformer.start !== "function") return;
+                    return transformer.start(controller);
+                },
+                pull: (chunk, controller) => {
+                    resolveRead();
+                },
+                cancel(reason) {},
+
+            }, readableStrategy);
+            const controller = makeTransformStreamDefaultController(
+                _writeController.get(this), _readController.get(this));
+
+            _writable.set(this, writable);
+            _readable.set(this, readable);
+        }
+        get writable() {return _writable.get(this);}
+        get readable() {return _readable.get(this);}
+    }
+
+    const _readController2 = new WeakMap();
+    const _writeController2 = new WeakMap();
+    const _lastWrite = new WeakMap();
+
+    const makeTransformStreamDefaultController = (writeController, readController) => {
+        const _this = Object.create(TransformStreamDefaultController.prototype);
+        _writeController2.set(_this, writeController);
+        _readController2.set(_this, readController);
+        return _this;
+    };
+
+    class TransformStreamDefaultController {
+        constructor() {throw new TypeError();}
+
+        get desiredSize() {
+            return _readController2.get(this).desiredSize;
+        }
+        enqueue(chunk) {
+            const ret = _readController2.get(this).enqueue(chunk);
+            _lastWrite.set(this, ret);
+            return ret;
+        }
+        error(reason) {
+            _writeController2.get(this).error(reason);
+            _readController2.get(this).error(reason);
+        }
+        terminate() {
+            _writeController2.get(this).error();
+            _readController2.get(this).close();
+        }
+    }
+
     var Module = (function() {
       var _scriptDir = typeof document !== 'undefined' && document.currentScript ? document.currentScript.src : undefined;
       return (
@@ -6015,6 +6110,70 @@
 
     // Copyright 2018 The Emulation-as-a-Service Authors.
 
+    /**
+     * @see <https://tools.ietf.org/html/rfc791>
+     */
+    class IPv4Parser extends TransformStream {
+        /**
+         * @param {payload: Uint8Array} lower
+         * @param {*} controller
+         */
+        static transform(lower, controller) {
+            const {type, payload} = lower;
+            if (type !== 0x800) return;
+            const ret = {
+                version: payload[0] >> 4,
+                ihl: payload[0] & 0b1111,
+                dscp: payload[1] >> 2,
+                ecn: payload[1] & 0b11,
+                length: payload[2] << 8 | payload[3],
+                id: payload[4] << 8 | payload[5],
+                flags: payload[6] >> 5,
+                fragmentOffset: (payload[6] & 0b11111) << 8 | payload[7],
+                ttl: payload[8],
+                /** @see <https://www.iana.org/assignments/protocol-numbers/protocol-numbers.xhtml> */
+                protocol: payload[9],
+                headerChecksum: payload[10] << 8 | payload[11],
+                source: payload.subarray(12, 12 + 4),
+                dest: payload.subarray(16, 16 + 4),
+            };
+            const headerLength = 20;
+            // TODO: options.
+            Object.assign(ret, {
+                payload: payload.subarray(headerLength, ret.length),
+                lower,
+            });
+            controller.enqueue(ret);
+        }
+        constructor() {super(new.target);}
+    }
+
+    /**
+     * @see <https://en.wikipedia.org/wiki/Ethernet_frame>
+     */
+    class EthernetParser extends TransformStream {
+        constructor({crcLength = 0} = {}) {
+            super({
+                /**
+                 * @param {Uint8Array} frame
+                 * @param {*} controller
+                 */
+                transform(frame, controller) {
+                    const dest = frame.subarray(0, 6);
+                    const source = frame.subarray(6, 12);
+                    /** @see <https://www.iana.org/assignments/ieee-802-numbers/ieee-802-numbers.xhtml> */
+                    const type = frame[12] << 8 | frame[13];
+                    const payload = frame.subarray(14, crcLength ? -crcLength : undefined);
+                    const crc = crcLength ? frame.subarray(-4) : null;
+                    controller.enqueue({source, dest, type, payload, crc, lower: frame});
+                }
+            });
+        }
+    }
+
+    // Copyright 2018 The Emulation-as-a-Service Authors.
+
+
     const iterator = reader => ({
         [Symbol.asyncIterator]: function () {return this;},
         next: () => reader.read(),
@@ -6025,14 +6184,17 @@
     async function main() {
       const nic = await new NIC(undefined, new Uint8Array([34, 250, 80, 37, 2, 130]));
       nic.readable.pipeThrough(broadcastStream("ethernet")).pipeThrough(nic);
-      nic.addIPv4("10.0.2.2");
 
-      await nic.startDHCPServer("10.0.2.2");
+      monitorNic();
+      nic.addIPv4("10.0.2.100");
 
-      console.log("dhcp started");
+      await nic.startDHCPServer("10.0.2.100");
+      //console.log("dhcp started");
 
-      const server = new nic.TCPServerSocket({localPort: 80, localAddress: "10.0.2.2"});
-      console.log(server.readable);
+      //await client_nic.startDHCPClient();
+
+      const server = new nic.TCPServerSocket({localPort: 8080, localAddress: "10.0.2.100"});
+      //console.log(server.readable)
       for await (const s of iterator(server.readable.getReader())) {
           (async () => {
               const req = new TextDecoder().decode((await s.readable.getReader().read()).value);
@@ -6049,10 +6211,50 @@
     }
 
 
+    const printer = (tag, ...args) => new TransformStream({
+        transform(v, c) {
+            console.log(...(tag ? [tag] : []), v);
+            c.enqueue(v);
+        }
+    });
 
 
+
+    async function monitorNic(nic) {
+    /*
+      nic.readable
+      .pipeThrough(new EthernetParser)
+      .pipeThrough(printer("ether out"))
+      .pipeThrough(new IPv4Parser)
+      .pipeThrough(printer("ip out"))
+      .pipeTo(new WritableStream);
+    */
+
+      broadcastStream("ethernet").readable
+      .pipeThrough(new EthernetParser)
+      .pipeThrough(printer("ether in"))
+      .pipeThrough(new IPv4Parser)
+      .pipeThrough(printer("ip in"))
+      .pipeTo(new WritableStream);
+
+
+    /*
+      const broadcast = broadcastStream("ethernet");
+      const printer1 = printer("ethernet");
+      const printer2 = printer("ip");
+      broadcast.readable
+          //.pipeThrough(new RecordStream(data))
+          .pipeThrough(new EthernetParser)
+          .pipeThrough(printer1)
+          .pipeThrough(new IPv4Parser)
+          .pipeThrough(printer2)
+          .pipeTo(new WritableStream);
+
+    */
+    }
 
 
     main();
+    //monitor();
 
 }());
