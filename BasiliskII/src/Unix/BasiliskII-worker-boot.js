@@ -204,8 +204,21 @@ function startEmulator(parentConfig) {
 
   var AudioBufferQueue = [];
 
+  var recvQ = [];
+
+  var ethernet = null;
+
+  console.log("Listen for ethernet messages");
+
+  ethernet = new BroadcastChannel("ethernet");
+
+  ethernet.addEventListener("message", (event) => {
+    recvQ.push(event.data);
+  });
+
   Module = {
-    autoloadFiles: ['MacOS753', 'DCImage.img', 'Quadra-650.rom', 'prefs'],
+    //autoloadFiles: ['MacOS753', 'DCImage.img', 'Quadra-650.rom', 'prefs'],
+    autoloadFiles: ['hd.img', 'performa.rom', 'prefs', 'Netscape Preferences'],
 
     arguments: ['--config', 'prefs'],
     canvas: null,
@@ -355,6 +368,26 @@ function startEmulator(parentConfig) {
     printErr: console.warn.bind(console),
 
     releaseInputLock: releaseInputLock,
+
+    send: function(bufPtr, length) {
+        console.log("Sending: " + length);
+        const chunk = Module.HEAPU8.slice(bufPtr, bufPtr + length);
+
+        //sendController.enqueue(res);
+        //writer.write(chunk);
+        ethernet.postMessage(chunk);
+    },
+
+    recv: function(bufPtr, length) {
+      if (recvQ.length) {
+        const chunk = recvQ.shift();
+        console.log("got chunk len: " + chunk.byteLength);
+        Module.HEAPU8.set(chunk, bufPtr);
+        return chunk.length;
+      }
+
+      return 0;
+    }
   };
 
   // inject extra behaviours
@@ -363,5 +396,8 @@ function startEmulator(parentConfig) {
 
   if (parentConfig.singleThreadedEmscripten) {
     importScripts('BasiliskII.js');
+    //importScripts('jsnet/jsnet.js');
   }
+
+  const networker = new Worker("jsnet/jsnet.js");
 }

@@ -1,4 +1,4 @@
-#ifndef EMSCRIPTEN
+//#ifndef EMSCRIPTEN
 
 /*
  *  ether_unix.cpp - Ethernet device driver, Unix specific stuff (Linux and FreeBSD)
@@ -83,6 +83,10 @@
 using std::map;
 #endif
 
+#ifdef EMSCRIPTEN
+#include <emscripten.h>
+#endif
+
 #define DEBUG 0
 #include "debug.h"
 
@@ -95,7 +99,8 @@ enum {
 	NET_IF_SHEEPNET,
 	NET_IF_ETHERTAP,
 	NET_IF_TUNTAP,
-	NET_IF_SLIRP
+	NET_IF_SLIRP,
+    NET_IF_JS
 };
 
 // Constants
@@ -142,6 +147,7 @@ static int slirp_add_redir(const char *redir_str);
  *  Start packet reception thread
  */
 
+
 static bool start_thread(void)
 {
 	if (sem_init(&int_ack, 0, 0) < 0) {
@@ -149,12 +155,14 @@ static bool start_thread(void)
 		return false;
 	}
 
+#ifdef HAVE_PTHREADS
 	Set_pthread_attr(&ether_thread_attr, 1);
 	thread_active = (pthread_create(&ether_thread, &ether_thread_attr, receive_func, NULL) == 0);
 	if (!thread_active) {
 		printf("WARNING: Cannot start Ethernet thread");
 		return false;
 	}
+#endif
 
 #ifdef HAVE_SLIRP
 	if (net_if_type == NET_IF_SLIRP) {
@@ -252,8 +260,27 @@ bool ether_init(void)
 	else if (strcmp(name, "slirp") == 0)
 		net_if_type = NET_IF_SLIRP;
 #endif
+    else if (strcmp(name, "js") == 0)
+        net_if_type = NET_IF_JS;
 	else
 		net_if_type = NET_IF_SHEEPNET;
+
+
+#ifdef EMSCRIPTEN
+    fd = 10;
+    ether_addr[0] = 0x52;
+    ether_addr[1] = 0x54;
+    ether_addr[2] = 0x00;
+    ether_addr[3] = 0x12;
+    ether_addr[4] = 0x34;
+    ether_addr[5] = 0x56;
+
+    //if (!start_thread())
+    //    goto open_error;
+
+    // Everything OK
+    return true;
+#endif
 
 	// Don't raise SIGPIPE, let errno be set to EPIPE
 	struct sigaction sigpipe_sa;
@@ -747,6 +774,15 @@ static int16 ether_do_write(uint32 arg)
 	bug("\n");
 #endif
 
+#ifdef EMSCRIPTEN
+    EM_ASM_({
+        Module.send($0, $1);
+    }, packet, len);
+
+    return noErr;
+#endif
+
+
 	// Transmit packet
 #ifdef HAVE_SLIRP
 	if (net_if_type == NET_IF_SLIRP) {
@@ -910,11 +946,29 @@ static void *receive_func(void *arg)
 
 void ether_do_interrupt(void)
 {
+
+
 	// Call protocol handler for received packets
 	EthernetPacket ether_packet;
 	uint32 packet = ether_packet.addr();
 	ssize_t length;
 	for (;;) {
+
+#ifdef EMSCRIPTEN
+      length = EM_ASM_INT({
+          Module.recv($0, 1514);
+      }, Mac2HostAddr(packet));
+
+      if (length < 14) {
+        break;
+      }
+
+      uint32 pp = packet;
+      ether_dispatch_packet(pp, length);
+      continue;
+#endif
+
+
 
 #ifndef SHEEPSHAVER
 		if (udp_tunnel) {
@@ -1031,22 +1085,26 @@ static int slirp_add_redir(const char *redir_str)
 	}
 	// 0.0.0.0 doesn't seem to work, so default to a client address
 	// if none is specified
+#ifndef EMSCRIPTEN
+
 	if (buf[0] == '\0' ?
 			!inet_aton(CTL_LOCAL, &guest_addr) :
 			!inet_aton(buf, &guest_addr)) {
 		goto fail_syntax;
 	}
-
+#endif
 	guest_port = strtol(p, &end, 0);
 	if (*end != '\0' || guest_port < 1 || guest_port > 65535) {
 		goto fail_syntax;
 	}
 
+#ifdef HAVE_SLIRP
 	if (slirp_redir(is_udp, host_port, guest_addr, guest_port) < 0) {
 		sprintf(str, "could not set up host forwarding rule '%s'", redir_str);
 		WarningAlert(str);
 		return -1;
 	}
+#endif
 	return 0;
 
  fail_syntax:
@@ -1056,4 +1114,4 @@ static int slirp_add_redir(const char *redir_str)
 }
 
 
-#endif
+//#endif

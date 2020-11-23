@@ -634,7 +634,8 @@ CAN_NATIVE_M68K=no
 
 
 if [[ -z "${macemujs_conf_native_os// }" ]]; then
-  echo "skipping network"
+  echo "using js network"
+  ETHERSRC=ether_unix.cpp
 
   # echo "adding browser io"
   # EXTRASYSSRCS="$EXTRASYSSRCS ../browser/browser_io.cpp"
@@ -831,7 +832,7 @@ if [[ "x$HAVE_PTHREADS" = "xno" ]]; then
   dnl Serial, ethernet and audio support needs pthreads
   AC_MSG_WARN([You don't have pthreads, disabling serial, ethernet and audio support.])
   SERIALSRC=../dummy/serial_dummy.cpp
-  ETHERSRC=../dummy/ether_dummy.cpp
+  #ETHERSRC=../dummy/ether_dummy.cpp
 
   if [[ -z "${macemujs_conf_native_os// }" ]]; then
   echo "(actually experimental single thread browser audio is still enabled)"

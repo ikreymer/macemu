@@ -1,0 +1,9 @@
+{
+  "name": "jsnet",
+  "version": "1.0.0",
+  "main": "index.js",
+  "license": "MIT",
+  "devDependencies": {
+    "rollup": "^2.33.3"
+  }
+}
