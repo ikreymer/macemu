@@ -426,6 +426,9 @@ function startEmulator(parentConfig) {
     },
 
     recv: function(bufPtr, length) {
+      if (!netrb) {
+        return 0;
+      }
 
       if (!netRecvBuffer || netRecvBuffer.byteLength === 0) {
         netRecvBuffer = new Uint8Array([...netrb.readToHead()]);

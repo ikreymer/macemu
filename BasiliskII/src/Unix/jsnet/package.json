@@ -4,9 +4,11 @@
   "main": "index.js",
   "license": "MIT",
   "devDependencies": {
+    "@rollup/plugin-node-resolve": "^10.0.0",
     "rollup": "^2.33.3"
   },
   "dependencies": {
-    "sab-ring-buffer": "https://github.com/PaulKinlan/sab-ring-buffer"
+    "sab-ring-buffer": "https://github.com/PaulKinlan/sab-ring-buffer",
+    "web-streams-polyfill": "^3.0.1"
   }
 }

@@ -1,6 +1,8 @@
 // Copyright 2018 The Emulation-as-a-Service Authors.
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+import "./polyfill.js";
+
 import {broadcastStream} from "./broadcast-stream.js";
 import {NIC, parseMAC, NetworkStack} from "./webnetwork.js";
 
@@ -137,7 +139,7 @@ function FindProxyForURL(url, host)
 
     const targetUrl = m[1];
 
-    const fetchUrl = "http://cors-anywhere.herokuapp.com/" + (replayTs ? `https://web.archive.org/web/${replayTs}id_/${targetUrl}` : targetUrl);
+    const fetchUrl = "https://cors-anywhere.herokuapp.com/" + (replayTs ? `https://web.archive.org/web/${replayTs}id_/${targetUrl}` : targetUrl);
 
     const resp = await fetch(fetchUrl);
     const content = await resp.arrayBuffer();
