@@ -6171,6 +6171,208 @@
         }
     }
 
+    /*
+       Copyright 2020 Google Inc.
+
+       Licensed under the Apache License, Version 2.0 (the "License");
+       you may not use this file except in compliance with the License.
+       You may obtain a copy of the License at
+
+         http://www.apache.org/licenses/LICENSE-2.0
+
+       Unless required by applicable law or agreed to in writing, software
+       distributed under the License is distributed on an "AS IS" BASIS,
+       WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+       See the License for the specific language governing permissions and
+       limitations under the License.
+    */
+
+    class RingBuffer {
+      static from(sab) {
+        return new RingBuffer(sab);
+      }
+
+      get buffer() {
+        return this._sab;
+      }
+
+      get remaining() {
+        return this._size - this.length;
+      }
+
+      get size() {
+        return this._size;
+      }
+
+      get length() {
+        let readIndex = Atomics.load(this._header, HEADER.READ);
+        let writeIndex = Atomics.load(this._header, HEADER.WRITE);
+
+        const delta = writeIndex - readIndex;
+        return readIndex <= writeIndex ? delta : delta + this._size;
+      }
+      
+      get eof() {
+        return (this.length === 0 && Atomics.load(this._state, READER_STATE.EOF) === 0) ? true : false;
+      }
+      
+      set eof(val) {
+        let eofVal = !!val ? 0 : 1;
+        if (this.length === 0 && val) {
+          Atomics.notify(this._state, READER_STATE.DATA_AVAILABLE);
+        }
+        Atomics.store(this._state, READER_STATE.EOF, eofVal);
+      }
+      
+      /* 
+        Create's a Ring Buffer backed by a correctly sized SAB.
+        
+        There can only be one writer and one reader.
+      */
+      static create(length) {
+        const buffer = new SharedArrayBuffer(
+          length 
+          + Uint32Array.BYTES_PER_ELEMENT * HEADER_LENGTH
+          + Int32Array.BYTES_PER_ELEMENT * READER_STATE_LENGTH
+        );
+        
+        return new RingBuffer(buffer);
+      }
+
+      constructor(sab) {
+        if (!!sab == false) throw new Error("Shared Array Buffer is undefined");
+        if (sab instanceof SharedArrayBuffer == false)
+          throw new Error("Parameter 0 is not a Shared Array Buffer");
+
+        this._size = sab.byteLength
+            - Uint32Array.BYTES_PER_ELEMENT * HEADER_LENGTH
+            - Int32Array.BYTES_PER_ELEMENT * READER_STATE_LENGTH;
+        this._sab = sab;
+        this._header = new Uint32Array(sab, 0, HEADER_LENGTH);
+        this._state = new Int32Array(sab, Uint32Array.BYTES_PER_ELEMENT * HEADER_LENGTH, READER_STATE_LENGTH);
+        this._body = new Uint8Array(
+          sab,
+          Uint32Array.BYTES_PER_ELEMENT * HEADER_LENGTH
+          + Int32Array.BYTES_PER_ELEMENT * READER_STATE_LENGTH,
+          this._size
+        );
+      }
+
+      /*
+        data: An array of Uint8
+        attemptToFill (deafault: false): if true, will fill as much of the array as possible 
+          returning the items that couldn't be added.
+        
+      */
+      append(data, attemptToFill = false) {
+        const { remaining, length, size } = this;
+
+        if (data.length > remaining && attemptToFill == false) {
+          throw new Error("Data being appended will overflow the buffer");
+        }
+
+        if (data instanceof Array == false && data instanceof Uint8Array == false) {
+          throw new Error(
+            "data is not an array that can be converted to Uint8array"
+          );
+        }
+
+        let writeIndex = Atomics.load(this._header, HEADER.WRITE);
+        let writeStart = writeIndex % size; 
+      
+        // We need at most two write operations.
+        // If the data will go past the end of the buffer, we need
+        // to write a 2nd batch from the start of the buffer.
+        // 9, 15
+        // batch1, pos [9] = val [0]
+        // batch2, pos [0] = val [1,2,3,4,5]
+
+        const batch1 = data.slice(0, size - writeStart);
+        this._body.set(batch1, writeStart);
+        let writeLength = batch1.length;
+        let slice = undefined;
+
+        if (writeLength < data.length) {
+          // We are wrapping around because there was more data.
+          const batch2 = data.slice(writeLength, remaining - writeLength);
+          this._body.set(batch2, 0);
+          writeLength += batch2.length;
+          
+          Atomics.add(this._header, HEADER.WRITE, writeLength);
+          
+          if (attemptToFill && (writeLength < data.length)) {
+            slice = data.slice(writeLength);
+          } 
+        }
+        else {
+          Atomics.add(this._header, HEADER.WRITE, writeLength);
+        }
+        
+        Atomics.store(this._state, READER_STATE.DATA_AVAILABLE, 1);
+        Atomics.notify(this._state, READER_STATE.DATA_AVAILABLE);
+        
+        return slice;
+      }
+
+      // Reads the next byte of data. Note: Assuming 4GB of addressable buffer.
+      read() {
+        let readIndex = Atomics.load(this._header, HEADER.READ);
+        let writeIndex = Atomics.load(this._header, HEADER.WRITE);
+        
+        if (readIndex == writeIndex - 1) {
+          // The next blocking read, should wait.
+          console.log('next block');
+          Atomics.store(this._state, READER_STATE.DATA_AVAILABLE, 0);
+          Atomics.notify(this._state, READER_STATE.DATA_AVAILABLE);
+        }
+
+        if (readIndex == writeIndex) {
+          return undefined;
+        }
+
+        const value = Atomics.load(this._body, readIndex % this._size);
+
+        readIndex = Atomics.add(this._header, HEADER.READ, 1);
+
+        return value;
+      }
+      
+      blockingRead() {
+        if (this.eof) return undefined;
+        
+        Atomics.wait(this._state, READER_STATE.DATA_AVAILABLE, 0);
+        return this.read();
+      }
+
+      *readToHead() {
+        // Feels odd to have to create a buffer the same size as the buffer. Just iterate.
+        let data;
+        while ((data = this.read()) != undefined) {
+          yield data;
+        }
+      }
+
+      clear() {
+        Atomics.store(this._header, HEADER.READ, 0);
+        Atomics.store(this._header, HEADER.WRITE, 0);
+      }
+    }
+
+    const HEADER = {
+      READ: 0, // 4GB buffer
+      WRITE: 1, // 4GB buffer
+    };
+
+    const HEADER_LENGTH = Object.keys(HEADER).length;
+
+    const READER_STATE = {
+      DATA_AVAILABLE: 0,
+      WAITING: 1,
+      EOF: 2
+    };
+
+    const READER_STATE_LENGTH = Object.keys(READER_STATE).length;
+
     // Copyright 2018 The Emulation-as-a-Service Authors.
 
 
@@ -6180,33 +6382,164 @@
         return: () => ({}),
     });
 
+    async function sleep(timeout) {
+      return new Promise((resolve) => setTimeout(resolve, timeout));
+    }
+
+    let replayUrl;
+    let replayTs;
+    let SERVER = "192.168.1.1";
+    let PORT = 8080;
+
+    const rb = RingBuffer.create(1514 * 64);
+    let emuPort = null;
+
+    self.onmessage = (event) => {
+      if (event.data.port) {
+        emuPort = event.data.port;
+        emuPort.postMessage(rb.buffer);
+      }
+      if (event.data.replayUrl) {
+        replayUrl = event.data.replayUrl;
+      }
+      if (event.data.replayTs) {
+        replayTs = event.data.replayTs;
+        console.log("Replay TS: " + replayTs);
+      }
+      if (event.data.SERVER) {
+        SERVER = event.data.SERVER;
+      }
+      if (event.data.PORT) {
+        PORT = event.data.PORT;
+      }
+      main();
+    };
+
+
+    const sabWriter = new WritableStream({
+      async write(chunk) {
+        while (true) {
+          try {
+            const sizeBuff = new ArrayBuffer(2);
+            new DataView(sizeBuff).setUint16(0, chunk.byteLength);
+            rb.append(new Uint8Array(sizeBuff));
+
+            rb.append(chunk);
+            console.log(`Writing chunk size: ${chunk.byteLength}`);
+            return true;
+          } catch (e) {
+            console.log("not enough space, wait and try again");
+            await sleep(100);
+          }
+        }
+      }
+    });
+
 
     async function main() {
       const nic = await new NIC(undefined, new Uint8Array([34, 250, 80, 37, 2, 130]));
-      nic.readable.pipeThrough(broadcastStream("ethernet")).pipeThrough(nic);
 
-      monitorNic();
-      nic.addIPv4("10.0.2.100");
+      nic.readable.pipeThrough(broadcastStream("eth_to_emu"));
 
-      await nic.startDHCPServer("10.0.2.100");
-      //console.log("dhcp started");
+      broadcastStream("eth_from_emu").readable.pipeThrough(nic);
 
-      //await client_nic.startDHCPClient();
+      monitorChannel("eth_from_emu", " -> ");
+      monitorChannel("eth_to_emu", " <- ");
 
-      const server = new nic.TCPServerSocket({localPort: 8080, localAddress: "10.0.2.100"});
-      //console.log(server.readable)
+      broadcastStream("eth_to_emu").readable.pipeTo(sabWriter);
+
+      nic.addIPv4(SERVER);
+
+      await nic.startDHCPServer(SERVER, "255.255.255.0");
+
+      const server = new nic.TCPServerSocket({localPort: PORT, localAddress: SERVER});
+
+      const PROXY_PAC = `
+function FindProxyForURL(url, host)
+{
+    if (isInNet(host, "${SERVER}") || shExpMatch(url, "http://${SERVER}:${PORT}/*")) {
+        return "DIRECT";
+    }
+
+    return "PROXY ${SERVER}:${PORT}";
+}
+`;
+
+      async function handleResponse(socket) {
+        const req = new TextDecoder().decode((await socket.readable.getReader().read()).value);
+        //console.log(req);
+
+        const m = req.match(/GET\s([^\s]+)/);
+        const writer = socket.writable.getWriter();
+
+        if (m) {
+          if (m[1] === "/proxy.pac") {
+            sendResponse({
+              content: PROXY_PAC,
+              contentType: "application/x-ns-proxy-autoconfig",
+              writer
+            });
+            return;
+          }
+
+          if (m[1] === "/") {
+            sendRedirect({
+              redirect: replayUrl,
+              writer
+            });
+            return;
+          }
+        }
+
+        if (!m || !m[1].startsWith("http://")) {
+          sendResponse({
+            content: "Invalid URL: " + JSON.stringify(m),
+            status: 400,
+            statusText: "Bad Request",
+            writer
+          });
+          return;
+        }
+
+        const targetUrl = m[1];
+
+        const fetchUrl = "http://cors-anywhere.herokuapp.com/" + (replayTs ? `https://web.archive.org/web/${replayTs}id_/${targetUrl}` : targetUrl);
+
+        const resp = await fetch(fetchUrl);
+        const content = await resp.arrayBuffer();
+        const { status, statusText } = resp;
+        const contentType = resp.headers.get("content-type");
+
+        sendResponse({content, status, statusText, contentType, writer});
+      }
+
+      const encoder = new TextEncoder();
+
+      function sendResponse({writer, content, status = 200, statusText = "OK", contentType = "text/plain"}) {
+        const payload = typeof(content) === "string" ? encoder.encode(content) : new Uint8Array(content);
+
+        writer.write(encoder.encode(`HTTP/1.0 ${status} ${statusText}\r\n\
+Content-Type: ${contentType}\r\n\
+Content-Length: ${payload.byteLength}\r\n\
+\r\n`));
+
+        writer.write(payload);
+        writer.close();
+      }
+
+      function sendRedirect({writer, redirect}) {
+        writer.write(encoder.encode(`HTTP/1.0 302 Redirect\r\n\
+Content-Type: text/plain\r\n\
+Content-Length: 0\r\n\
+Location: ${redirect}\r\n\
+\r\n`));
+
+        writer.close();
+      }
+
+
       for await (const s of iterator(server.readable.getReader())) {
-          (async () => {
-              const req = new TextDecoder().decode((await s.readable.getReader().read()).value);
-              const path = req.match(/^GET (\S+)/)[1];
-              console.log(path);
-              const w = s.writable.getWriter();
-
-              w.write(new TextEncoder().encode("HTTP/1.1 200 OK\r\n\r\n"));
-              w.releaseLock();
-              (await tryRead(drop.fs, path)).body.pipeTo(s.writable);
-              return;
-          })();
+        handleResponse(s);
       }
     }
 
@@ -6220,41 +6553,17 @@
 
 
 
-    async function monitorNic(nic) {
-    /*
-      nic.readable
+    async function monitorChannel(name, label) {
+      broadcastStream(name).readable
       .pipeThrough(new EthernetParser)
-      .pipeThrough(printer("ether out"))
+      .pipeThrough(printer("ether " + label))
       .pipeThrough(new IPv4Parser)
-      .pipeThrough(printer("ip out"))
+      .pipeThrough(printer("ip " + label))
       .pipeTo(new WritableStream);
-    */
-
-      broadcastStream("ethernet").readable
-      .pipeThrough(new EthernetParser)
-      .pipeThrough(printer("ether in"))
-      .pipeThrough(new IPv4Parser)
-      .pipeThrough(printer("ip in"))
-      .pipeTo(new WritableStream);
-
-
-    /*
-      const broadcast = broadcastStream("ethernet");
-      const printer1 = printer("ethernet");
-      const printer2 = printer("ip");
-      broadcast.readable
-          //.pipeThrough(new RecordStream(data))
-          .pipeThrough(new EthernetParser)
-          .pipeThrough(printer1)
-          .pipeThrough(new IPv4Parser)
-          .pipeThrough(printer2)
-          .pipeTo(new WritableStream);
-
-    */
     }
 
 
-    main();
+    //main();
     //monitor();
 
 }());

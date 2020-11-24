@@ -13,3 +13,7 @@ rollup@^2.33.3:
   integrity sha512-RpayhPTe4Gu/uFGCmk7Gp5Z9Qic2VsqZ040G+KZZvsZYdcuWaJg678JeDJJvJeEQXminu24a2au+y92CUWVd+w==
   optionalDependencies:
     fsevents "~2.1.2"
+
+"sab-ring-buffer@https://github.com/PaulKinlan/sab-ring-buffer":
+  version "0.0.0"
+  resolved "https://github.com/PaulKinlan/sab-ring-buffer#26c7e9d03f76dfb539704af909142242848ca3d3"

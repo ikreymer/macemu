@@ -5,5 +5,8 @@
   "license": "MIT",
   "devDependencies": {
     "rollup": "^2.33.3"
+  },
+  "dependencies": {
+    "sab-ring-buffer": "https://github.com/PaulKinlan/sab-ring-buffer"
   }
 }

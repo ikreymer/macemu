@@ -366,6 +366,10 @@ window.addEventListener('keyup', function(event) {
   inputQueue.push({type: 'keyup', keyCode: event.keyCode});
 });
 
+if (!window.location.hash) {
+  window.location.hash = "#1996/geocities.com/";
+}
+
 var workerConfig = {
   inputBuffer: inputBuffer,
   inputBufferSize: INPUT_BUFFER_SIZE,
@@ -379,6 +383,7 @@ var workerConfig = {
   audioBlockChunkSize: audioBlockChunkSize,
   SCREEN_WIDTH: SCREEN_WIDTH,
   SCREEN_HEIGHT: SCREEN_HEIGHT,
+  hashConfig: window.location.hash,
 };
 
 if (singleThreadedEmscripten) {

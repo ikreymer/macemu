@@ -633,13 +633,17 @@ static void ether_dispatch_packet(uint32 p, uint32 length)
 
 	// Look for protocol
 	uint16 search_type = (type <= 1500 ? 0 : type);
-	if (net_protocols.find(search_type) == net_protocols.end())
+	if (net_protocols.find(search_type) == net_protocols.end()) {
+        EM_ASM({ Module.print("no net_protocols") });
 		return;
+    }
 	uint32 handler = net_protocols[search_type];
 
 	// No default handler
-	if (handler == 0)
+	if (handler == 0) {
+        EM_ASM({ Module.print("no net_protocols handler") });
 		return;
+    }
 
 	// Copy header to RHA
 	Mac2Mac_memcpy(ether_data + ed_RHA, p, 14);
@@ -955,8 +959,8 @@ void ether_do_interrupt(void)
 	for (;;) {
 
 #ifdef EMSCRIPTEN
-      length = EM_ASM_INT({
-          Module.recv($0, 1514);
+      length = (ssize_t)EM_ASM_INT({
+          return Module.recv($0, 1514);
       }, Mac2HostAddr(packet));
 
       if (length < 14) {

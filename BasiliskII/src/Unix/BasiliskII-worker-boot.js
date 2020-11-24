@@ -96,6 +96,9 @@ var LockStates = {
 
 var Module = null;
 
+const netWorker = new Worker("jsnet/jsnet.js");
+
+
 self.onmessage = function(msg) {
   console.log('init worker');
   startEmulator(Object.assign({}, msg.data, {singleThreadedEmscripten: true}));
@@ -204,21 +207,67 @@ function startEmulator(parentConfig) {
 
   var AudioBufferQueue = [];
 
-  var recvQ = [];
 
-  var ethernet = null;
+  var netrb;
 
   console.log("Listen for ethernet messages");
+  importScripts("jsnet/rb.js");
 
-  ethernet = new BroadcastChannel("ethernet");
+  const ethernet = new BroadcastChannel("eth_from_emu");
 
-  ethernet.addEventListener("message", (event) => {
-    recvQ.push(event.data);
-  });
+  const netChannel = new MessageChannel();
+
+  let replayUrl = "";
+  let replayTs = "";
+  const SERVER = "10.0.2.2";
+  const PORT = 6082;
+
+  if (parentConfig.hashConfig) {
+    const m = parentConfig.hashConfig.slice(1).match(/\/?(?:([\d]+)\/)?(.*)/);
+    if (m) {
+      if (m[1]) {
+        replayTs = m[1];
+      }
+      replayUrl = m[2];
+      if (replayUrl.startsWith("https://")) {
+        replayUrl = replayUrl.replace("https://", "http://");
+      }
+      if (!replayUrl.startsWith("http://")) {
+        replayUrl = "http://" + replayUrl;
+      }
+    }
+  }
+
+  netWorker.postMessage({
+    port: netChannel.port1,
+    replayUrl,
+    replayTs,
+    SERVER,
+    PORT,
+  }, [netChannel.port1]);
+
+  netChannel.port2.onmessage = (event) => {
+    console.log("got shared ringbuffer", event.data);
+    netrb = RingBuffer.from(event.data);
+  }
+
+  let netRecvBuffer = null;
+
+  const rewriteFiles = {
+    "Netscape Preferences": (data) => {
+
+      data = new TextDecoder().decode(data).replace("$URL", replayUrl).replace(/[$]SERVER/g, SERVER).replace(/[$]PORT/g, PORT);
+      return new TextEncoder().encode(data);
+    },
+
+    "proxy_prefs": (data) => {
+      return new TextEncoder().encode(`${SERVER}:${PORT}\r\n${replayUrl}\r\n`);
+    }
+  }
 
   Module = {
     //autoloadFiles: ['MacOS753', 'DCImage.img', 'Quadra-650.rom', 'prefs'],
-    autoloadFiles: ['hd.img', 'performa.rom', 'prefs', 'Netscape Preferences'],
+    autoloadFiles: ['hd.img', 'performa.rom', 'prefs', 'Netscape Preferences', 'proxy_prefs'],
 
     arguments: ['--config', 'prefs'],
     canvas: null,
@@ -370,23 +419,72 @@ function startEmulator(parentConfig) {
     releaseInputLock: releaseInputLock,
 
     send: function(bufPtr, length) {
-        console.log("Sending: " + length);
-        const chunk = Module.HEAPU8.slice(bufPtr, bufPtr + length);
+      console.log(`Emu Send ${length}`);
+      const chunk = Module.HEAPU8.slice(bufPtr, bufPtr + length);
 
-        //sendController.enqueue(res);
-        //writer.write(chunk);
-        ethernet.postMessage(chunk);
+      ethernet.postMessage(chunk);
     },
 
     recv: function(bufPtr, length) {
-      if (recvQ.length) {
-        const chunk = recvQ.shift();
-        console.log("got chunk len: " + chunk.byteLength);
+
+      if (!netRecvBuffer || netRecvBuffer.byteLength === 0) {
+        netRecvBuffer = new Uint8Array([...netrb.readToHead()]);
+      }
+
+      if (netRecvBuffer.byteLength > 0) {
+        const size = new DataView(netRecvBuffer.buffer, netRecvBuffer.byteOffset, netRecvBuffer.byteLength).getUint16(0);
+        const chunk = netRecvBuffer.slice(2, 2 + size);
+
+        console.log(`Emu Receive ${chunk.byteLength}`);
         Module.HEAPU8.set(chunk, bufPtr);
-        return chunk.length;
+
+        netRecvBuffer = netRecvBuffer.slice(2 + size);
+        return size;
       }
 
       return 0;
+/*
+      const chunk = new Uint8Array([...netrb.readToHead()]);
+
+      if (chunk.byteLength) {
+        console.log(`Emu Receive ${chunk.byteLength}`);
+        Module.HEAPU8.set(chunk, bufPtr);
+      }
+
+      return chunk.byteLength;
+*/
+    },
+
+    readAsync: function readAsync(url, onload, onerrorFinal) {
+      var xhr = new XMLHttpRequest();
+      console.log("Loading: " + url);
+      xhr.open('GET', url, true);
+      xhr.responseType = 'arraybuffer';
+      xhr.onload = function xhr_onload() {
+        let result;
+        if (xhr.status == 200 || (xhr.status == 0 && xhr.response)) { // file URLs can return 0
+          result = xhr.response;
+          if (rewriteFiles[url]) {
+            result = rewriteFiles[url](result);
+          }
+ 
+          onload(result);
+          return;
+        }
+        onerror();
+      };
+      function onerror() {
+        if (rewriteFiles[url]) {
+          const result = rewriteFiles[url]();
+          if (result) {
+            onload(result);
+            return;
+          }
+        }
+        onerrorFinal();
+      }
+      xhr.onerror = onerror;
+      xhr.send(null);
     }
   };
 
@@ -396,8 +494,5 @@ function startEmulator(parentConfig) {
 
   if (parentConfig.singleThreadedEmscripten) {
     importScripts('BasiliskII.js');
-    //importScripts('jsnet/jsnet.js');
   }
-
-  const networker = new Worker("jsnet/jsnet.js");
 }
