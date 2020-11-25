@@ -176,7 +176,7 @@ export class NIC {
         HEAPU32[0] = 0
         HEAPU32[1] = 0;
         HEAPU32[2] = 0;
-        HEAPU32[3] = 0;
+        HEAPU32[3] = 864000;  // 10 days DHCP lease
         HEAPU32[4] = this.dev;
         HEAPU32[5] = 0;
         HEAPU32[6] = new Uint32Array(Uint8Array.from(
