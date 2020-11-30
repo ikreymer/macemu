@@ -253,6 +253,16 @@ function startEmulator(parentConfig) {
 
   let netRecvBuffer = null;
 
+  const hdImgs = {
+    "br-ns3": "hd-ns.img",
+    "br-ns4": "hd-ns.img",
+    "br-ie4": "hd-ie-m.img",
+    "br-nm2": "hd-ie-m.img",
+    "br-nm3": "hd-ns.img",
+  }
+
+  const hdImg = hdImgs[parentConfig.browserType] || "hd-ns.img";
+
   const rewriteFiles = {
     "Netscape Preferences": (data) => {
 
@@ -262,12 +272,19 @@ function startEmulator(parentConfig) {
 
     "proxy_prefs": (data) => {
       return new TextEncoder().encode(`${SERVER}:${PORT}\r\n${replayUrl}\r\n`);
+    },
+
+    "prefs": (data) => {
+      data = new TextDecoder().decode(data).replace("$DISK", hdImg);
+      return new TextEncoder().encode(data);
     }
+
   }
 
   Module = {
     //autoloadFiles: ['MacOS753', 'DCImage.img', 'Quadra-650.rom', 'prefs'],
-    autoloadFiles: ['hd.img', 'performa.rom', 'prefs', 'Netscape Preferences', 'proxy_prefs'],
+    //autoloadFiles: ['hd.img', 'performa.rom', 'prefs', 'Netscape Preferences', 'proxy_prefs'],
+    autoloadFiles: [hdImg, 'performa.rom', 'prefs', parentConfig.browserType],
 
     arguments: ['--config', 'prefs'],
     canvas: null,
@@ -340,7 +357,6 @@ function startEmulator(parentConfig) {
       // console.time('await worker video lock');
       // waitForTwoStateLock(videoModeBufferView, 9);
       // console.timeEnd('await worker video lock');
-
       videoModeBufferView[0] = width;
       videoModeBufferView[1] = height;
       videoModeBufferView[2] = depth;
@@ -458,9 +474,17 @@ function startEmulator(parentConfig) {
 */
     },
 
+    screenWidth: function() {
+      return parentConfig.screenWidth;
+    },
+
+    screenHeight: function() {
+      return parentConfig.screenHeight;
+    },
+
     readAsync: function readAsync(url, onload, onerrorFinal) {
-      var xhr = new XMLHttpRequest();
       console.log("Loading: " + url);
+      var xhr = new XMLHttpRequest();
       xhr.open('GET', url, true);
       xhr.responseType = 'arraybuffer';
       xhr.onload = function xhr_onload() {
@@ -472,6 +496,10 @@ function startEmulator(parentConfig) {
           }
  
           onload(result);
+          return;
+        }
+        if (url.startsWith("br-")) {
+          onload(new TextEncoder().encode("test"));
           return;
         }
         onerror();

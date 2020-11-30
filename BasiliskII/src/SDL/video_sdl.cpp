@@ -453,7 +453,7 @@ static void sdl_display_dimensions(int &width, int &height)
 static inline int sdl_display_width(void)
 {
 	#ifdef EMSCRIPTEN
-		return 800;
+	return EM_ASM_INT({ return Module.screenWidth(); });
 	#endif
 	int width, height;
 	sdl_display_dimensions(width, height);
@@ -463,7 +463,7 @@ static inline int sdl_display_width(void)
 static inline int sdl_display_height(void)
 {
 	#ifdef EMSCRIPTEN
-		return 600;
+	return EM_ASM_INT({ return Module.screenHeight(); });
 	#endif
 	int width, height;
 	sdl_display_dimensions(width, height);

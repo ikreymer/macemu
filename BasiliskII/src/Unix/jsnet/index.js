@@ -26,6 +26,7 @@ let replayUrl;
 let replayTs;
 let SERVER = "192.168.1.1";
 let PORT = 8080;
+let homeUrl;
 
 const rb = RingBuffer.create(1514 * 64);
 let emuPort = null;
@@ -48,6 +49,7 @@ self.onmessage = (event) => {
   if (event.data.PORT) {
     PORT = event.data.PORT;
   }
+  homeUrl = `http://${SERVER}:${PORT}/`;
   main();
 };
 
@@ -118,7 +120,7 @@ function FindProxyForURL(url, host)
         return;
       }
 
-      if (m[1] === "/") {
+      if (m[1] === "/" || m[1] === homeUrl) {
         sendRedirect({
           redirect: replayUrl,
           writer

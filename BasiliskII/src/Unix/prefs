@@ -1,4 +1,4 @@
-disk hd.img
+disk $DISK
 extfs /
 screen win/1024/768
 seriala 

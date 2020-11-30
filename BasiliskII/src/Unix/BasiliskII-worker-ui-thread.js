@@ -1,5 +1,7 @@
-var SCREEN_WIDTH = 800;
-var SCREEN_HEIGHT = 600;
+var params = new URL(window.location.href).searchParams;
+
+var SCREEN_WIDTH = parseInt(params.get("w")) || 800;
+var SCREEN_HEIGHT = parseInt(params.get("h")) || 600;
 
 canvas.width = SCREEN_WIDTH;
 canvas.height = SCREEN_HEIGHT;
@@ -370,6 +372,8 @@ if (!window.location.hash) {
   window.location.hash = "#1996/geocities.com/";
 }
 
+const browserType = "br-" + (params.get("browser") || "ns3");
+
 var workerConfig = {
   inputBuffer: inputBuffer,
   inputBufferSize: INPUT_BUFFER_SIZE,
@@ -381,9 +385,10 @@ var workerConfig = {
   audioDataBufferSize: AUDIO_DATA_BUFFER_SIZE,
   audioBlockBufferSize: audio.bufferSize,
   audioBlockChunkSize: audioBlockChunkSize,
-  SCREEN_WIDTH: SCREEN_WIDTH,
-  SCREEN_HEIGHT: SCREEN_HEIGHT,
+  screenWidth: SCREEN_WIDTH,
+  screenHeight: SCREEN_HEIGHT,
   hashConfig: window.location.hash,
+  browserType
 };
 
 if (singleThreadedEmscripten) {
